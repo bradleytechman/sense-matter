@@ -299,7 +299,7 @@ export class SenseApi extends EventEmitter {
         const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
         try {
             const res = await fetch(url, { ...init, headers, signal: controller.signal });
-            const body = await res.json().catch(() => ({}));
+            const body = await res.json().catch(() => ({})) as AuthResponse & Record<string, any>;
             return { status: res.status, body };
         } finally {
             clearTimeout(timeout);
