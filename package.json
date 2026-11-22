@@ -1,6 +1,6 @@
 {
   "name": "homebridge-sense-matter",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sense Energy Monitor for Apple Home via Matter (live watts + cumulative energy in the Home app Energy view)",
   "displayName": "Sense Matter",
   "type": "module",
@@ -12,12 +12,13 @@
     "README.md"
   ],
   "scripts": {
-    "build": "rimraf ./dist && tsc",
+    "build": "rm -rf dist && tsc",
     "prepublishOnly": "npm run build",
     "prepare": "npm run build"
   },
   "keywords": [
     "homebridge-plugin",
+    "supports-matter",
     "matter",
     "sense",
     "energy",
@@ -41,7 +42,6 @@
     "@types/node": "^20.19.43",
     "@types/ws": "^8.18.2",
     "homebridge": "^2.5.0",
-    "rimraf": "^6.1.4",
     "typescript": "^5.9.3"
   }
 }
