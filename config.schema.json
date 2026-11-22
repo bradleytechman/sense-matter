@@ -1,0 +1,17 @@
+{
+  "pluginAlias": "SenseMatter",
+  "pluginType": "platform",
+  "singular": true,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": { "title": "Name", "type": "string", "default": "Sense Matter", "required": true },
+      "username": { "title": "Sense Email", "type": "string", "required": true },
+      "password": { "title": "Sense Password", "type": "string", "required": true },
+      "monitorId": { "title": "Monitor ID (optional)", "type": "string" },
+      "mfaEnabled": { "title": "MFA Enabled", "type": "boolean", "default": false },
+      "mfaSecret": { "title": "MFA Secret (base32)", "type": "string" },
+      "pollingInterval": { "title": "Polling Interval (seconds)", "type": "integer", "default": 30, "minimum": 10 }
+    }
+  }
+}
