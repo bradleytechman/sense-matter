@@ -130,12 +130,14 @@ export class SenseApi extends EventEmitter {
 
     async authenticate(): Promise<void> {
         this.log.info('Authenticating with Sense...');
+        const form = new URLSearchParams({
+            email: this.username,
+            password: this.password,
+        });
         const { status, body } = await this.fetchJson('authenticate', {
             method: 'POST',
-            body: JSON.stringify({
-                email: this.username,
-                password: this.password,
-            }),
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: form.toString(),
         });
 
         if (status === 401 && body.status === 'mfa_required' && body.mfa_token) {
@@ -143,12 +145,14 @@ export class SenseApi extends EventEmitter {
                 throw new Error('MFA required but mfaEnabled/mfaSecret not configured');
             }
             const totp = generateTotp(this.mfaSecret);
+            const mfaForm = new URLSearchParams({
+                mfa_token: body.mfa_token,
+                totp,
+            });
             const mfaRes = await this.fetchJson('authenticate/mfa', {
                 method: 'POST',
-                body: JSON.stringify({
-                    mfa_token: body.mfa_token,
-                    totp,
-                }),
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: mfaForm.toString(),
             });
             if (mfaRes.status !== 200 || !mfaRes.body.access_token) {
                 throw new Error(`MFA failed: ${mfaRes.body.error_reason || mfaRes.status}`);
