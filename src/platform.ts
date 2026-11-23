@@ -16,7 +16,7 @@ interface SenseConfig extends PlatformConfig {
   username: string;
   password: string;
   monitorId?: string;
-  mfaEnabled?: boolean;
+  mfaType?: 'none' | 'totp';
   mfaSecret?: string;
   pollingInterval?: number;
 }
@@ -74,7 +74,7 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
       username: cfg.username,
       password: cfg.password,
       monitorId: cfg.monitorId,
-      mfaEnabled: cfg.mfaEnabled,
+      mfaEnabled: cfg.mfaType === 'totp',
       mfaSecret: cfg.mfaSecret,
       storagePath: this.api.user.storagePath(),
     });

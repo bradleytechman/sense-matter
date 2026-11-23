@@ -12,33 +12,22 @@ Live watts, voltage, current, and cumulative energy appear directly in the Home 
 
 ## Install
 
-From GitHub (recommended while this is new):
-
 ```bash
-npm install -g github:bradleytechman/sense-matter
-```
-
-Or clone, build, and install:
-
-```bash
-git clone https://github.com/bradleytechman/sense-matter.git
-cd sense-matter
-npm install
-npm run build
-# then in Homebridge UI search for the local path or publish yourself
+npm install -g homebridge-sense-matter
 ```
 
 ## Configuration
+
+Add the **Sense Matter** platform in the Homebridge UI (or manually):
 
 ```json
 {
   "platforms": [
     {
       "platform": "SenseMatter",
-      "name": "Sense Matter",
       "username": "you@example.com",
       "password": "your-sense-password",
-      "mfaEnabled": false,
+      "mfaType": "none",
       "mfaSecret": "",
       "monitorId": "",
       "pollingInterval": 30
@@ -51,6 +40,27 @@ npm run build
 - Restart Homebridge and pair using the Matter QR code shown in the UI.
 - In the Home app the accessory appears as an outlet. Live wattage shows on the tile (iOS 27+); energy history is under the Energy view.
 
+## MFA / TOTP Setup
+
+If your Sense account has two-factor authentication enabled:
+
+1. In the plugin config, set **Multi-Factor Authentication** to **TOTP**.
+2. You need the **base32 secret** that was shown when you originally set up the authenticator app.
+
+### How to get the base32 secret
+
+Sense (and most TOTP setups) shows a secret key during initial MFA enrollment. If you still have it, use that.
+
+If you no longer have the original secret:
+
+1. Log in to the Sense app or web portal.
+2. Go to account / security settings and **disable** then **re-enable** MFA / two-factor authentication.
+3. During setup, Sense will show a QR code and usually also a manual entry key (a base32 string like `JBSWY3DPEHPK3PXP`).
+4. Copy that key and paste it into the plugin’s **MFA Secret (base32)** field.
+5. Complete the MFA setup in your authenticator app as normal.
+
+The plugin uses that secret to generate the current TOTP code automatically.
+
 ## What you get
 
 - Whole-home power (W)
@@ -61,8 +71,7 @@ npm run build
 ## Notes
 
 - Cumulative energy is tracked locally from the moment the plugin starts (Sense does not expose a persistent lifetime counter over the realtime API).
-- MFA: enable `mfaEnabled` and provide the base32 `mfaSecret` if your Sense account uses TOTP.
-- Icon: the plugin ships with the orange house + lightning icon you provided.
+- Icon: the plugin ships with the orange house + lightning icon.
 
 ## Credits
 

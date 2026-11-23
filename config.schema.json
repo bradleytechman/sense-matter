@@ -5,13 +5,61 @@
   "schema": {
     "type": "object",
     "properties": {
-      "name": { "title": "Name", "type": "string", "default": "Sense Matter", "required": true },
-      "username": { "title": "Sense Email", "type": "string", "required": true },
-      "password": { "title": "Sense Password", "type": "string", "required": true },
-      "monitorId": { "title": "Monitor ID (optional)", "type": "string" },
-      "mfaEnabled": { "title": "MFA Enabled", "type": "boolean", "default": false },
-      "mfaSecret": { "title": "MFA Secret (base32)", "type": "string" },
-      "pollingInterval": { "title": "Polling Interval (seconds)", "type": "integer", "default": 30, "minimum": 10 }
+      "username": {
+        "title": "Sense Email",
+        "type": "string",
+        "required": true
+      },
+      "password": {
+        "title": "Sense Password",
+        "type": "string",
+        "required": true,
+        "format": "password"
+      },
+      "monitorId": {
+        "title": "Monitor ID (optional)",
+        "type": "string",
+        "description": "Leave blank to use the first monitor on the account"
+      },
+      "mfaType": {
+        "title": "Multi-Factor Authentication",
+        "type": "string",
+        "enum": ["none", "totp"],
+        "default": "none",
+        "description": "Select TOTP if your Sense account has MFA enabled"
+      },
+      "mfaSecret": {
+        "title": "MFA Secret (base32)",
+        "type": "string",
+        "description": "The base32 secret from when you set up MFA. See the README for how to get it.",
+        "condition": {
+          "functionBody": "return model.mfaType === 'totp';"
+        }
+      },
+      "pollingInterval": {
+        "title": "Polling Interval (seconds)",
+        "type": "integer",
+        "default": 30,
+        "minimum": 10
+      }
     }
-  }
+  },
+  "layout": [
+    {
+      "type": "section",
+      "title": "Sense Account",
+      "items": ["username", "password", "monitorId"]
+    },
+    {
+      "type": "section",
+      "title": "Multi-Factor Authentication",
+      "items": ["mfaType", "mfaSecret"]
+    },
+    {
+      "type": "section",
+      "title": "Advanced",
+      "expandable": true,
+      "items": ["pollingInterval"]
+    }
+  ]
 }
