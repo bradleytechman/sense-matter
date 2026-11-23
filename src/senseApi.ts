@@ -194,9 +194,13 @@ export class SenseApi extends EventEmitter {
             return;
         }
         this.closeStream();
-        const url = `${WS_URL}${this.monitorId}`;
+        const url = `${WS_URL}${this.monitorId}/realtimefeed`;
         this.ws = new WebSocket(url, {
-            headers: { Authorization: `Bearer ${this.accessToken}` },
+            headers: {
+                Authorization: `Bearer ${this.accessToken}`,
+                'Sense-Client-Version': '1.18.0',
+                'X-Sense-Protocol': '3',
+            },
         });
 
         this.ws.on('open', () => {
