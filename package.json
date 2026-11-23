@@ -1,6 +1,6 @@
 {
   "name": "homebridge-sense-matter",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Sense Energy Monitor for Apple Home via Matter (live watts + cumulative energy in the Home app Energy view)",
   "displayName": "Sense Energy (Matter)",
   "type": "module",

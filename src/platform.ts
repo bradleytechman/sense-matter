@@ -16,7 +16,7 @@ interface SenseConfig extends PlatformConfig {
   username: string;
   password: string;
   monitorId?: string;
-  mfaType?: 'none' | 'totp';
+  mfaType?: 'Disabled' | 'TOTP';
   mfaSecret?: string;
   pollingInterval?: number;
 }
@@ -74,7 +74,7 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
       username: cfg.username,
       password: cfg.password,
       monitorId: cfg.monitorId,
-      mfaEnabled: cfg.mfaType === 'totp',
+      mfaEnabled: cfg.mfaType === 'TOTP',
       mfaSecret: cfg.mfaSecret,
       storagePath: this.api.user.storagePath(),
     });
@@ -114,13 +114,12 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
     const accessory: MatterAccessory = {
       UUID: uuid,
       displayName: 'Sense Energy',
-      deviceType: this.api.matter.deviceTypes.OnOffOutlet,
+      deviceType: this.api.matter.deviceTypes.ElectricalSensor,
       manufacturer: 'Sense',
       model: 'Energy Monitor',
       serialNumber: 'sense-whole-home',
       context: {},
       clusters: {
-        onOff: { onOff: true },
         electricalPowerMeasurement: {
           activePower: 0,       // mW
           voltage: 120_000,     // mV
@@ -134,7 +133,7 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
 
     try {
       await this.api.matter.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
-      this.log.info('Registered Sense as Matter energy device (OnOffOutlet + power/energy clusters)');
+      this.log.info('Registered Sense as Matter ElectricalSensor (power/energy only, no outlet tile)');
     } catch (err) {
       this.log.error('Failed to register Matter accessory:', err);
     }
