@@ -41,6 +41,13 @@
         "type": "integer",
         "default": 30,
         "minimum": 10
+      },
+      "deviceType": {
+        "title": "Device Type",
+        "type": "string",
+        "enum": ["sensor", "outlet"],
+        "default": "sensor",
+        "description": "sensor = ElectricalSensor (Energy section only, no room tile). outlet = OnOffOutlet (room tile with live watts; energy still in Energy view). Change requires restart + re-pair."
       }
     }
   },
@@ -57,9 +64,9 @@
     },
     {
       "type": "section",
-      "title": "Advanced",
+      "title": "Appearance & Advanced",
       "expandable": true,
-      "items": ["pollingInterval"]
+      "items": ["deviceType", "pollingInterval"]
     }
   ]
 }

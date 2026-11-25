@@ -27,10 +27,11 @@ Add the **Sense Matter** platform in the Homebridge UI (or manually):
       "platform": "SenseMatter",
       "username": "you@example.com",
       "password": "your-sense-password",
-      "mfaType": "none",
+      "mfaType": "Disabled",
       "mfaSecret": "",
       "monitorId": "",
-      "pollingInterval": 30
+      "pollingInterval": 30,
+      "deviceType": "sensor"
     }
   ]
 }
@@ -38,7 +39,11 @@ Add the **Sense Matter** platform in the Homebridge UI (or manually):
 
 - Enable **Matter** on the bridge (child bridge recommended).
 - Restart Homebridge and pair using the Matter QR code shown in the UI.
-- In the Home app the accessory appears as an outlet. Live wattage shows on the tile (iOS 27+); energy history is under the Energy view.
+- **deviceType**:
+  - `"sensor"` (default) — ElectricalSensor. No room tile. Appears in the Energy / Electricity section (All Home / Power list).
+  - `"outlet"` — OnOffOutlet. Gets a room tile that shows live watts. Energy data still appears in the Energy view. (You can later use Home app “Show As” if you want a different icon.)
+
+Detailed per-device usage graphs (total kWh, day/week/month charts, Cleaner/Less Clean) appear when you open Energy → Usages and select the Sense Energy device. This works for both types. Whole-home contribution is always counted.
 
 ## MFA / TOTP Setup
 
@@ -67,11 +72,14 @@ The plugin uses that secret to generate the current TOTP code automatically.
 - Voltage and current
 - Cumulative imported energy (Wh) that accumulates while the plugin is running
 - Realtime updates via Sense WebSocket + fallback polling
+- Energy value persisted across Homebridge restarts
 
 ## Notes
 
-- Cumulative energy is tracked locally from the moment the plugin starts (Sense does not expose a persistent lifetime counter over the realtime API).
+- Cumulative energy is tracked locally (Sense does not expose a persistent lifetime counter over the realtime API). It is persisted to disk so it survives restarts.
+- Energy cluster updates are throttled to roughly once per minute (power updates remain frequent). This prevents Matter subscription failures.
 - Icon: the plugin ships with the orange house + lightning icon.
+- After changing `deviceType`, remove the accessory from Home and re-pair the bridge.
 
 ## Credits
 
