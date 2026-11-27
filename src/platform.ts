@@ -35,6 +35,9 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
   private cumulativeEnergyWh = 0;
   private lastPowerUpdate = Date.now();
   private lastEnergyPush = 0;
+  private lastPowerLog = 0;
+  private pollTimer?: ReturnType<typeof setInterval>;
+  private saveTimer?: ReturnType<typeof setInterval>;
   private energyFile: string;
 
   constructor(
@@ -57,6 +60,8 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
     });
 
     this.api.on('shutdown', () => {
+      if (this.pollTimer) clearInterval(this.pollTimer);
+      if (this.saveTimer) clearInterval(this.saveTimer);
       this.saveEnergy();
       this.senseApi?.destroy();
     });
@@ -124,16 +129,26 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
       this.updateMatterState(data);
     });
 
-    // Fallback polling
-    const interval = (cfg.pollingInterval ?? 30) * 1000;
-    setInterval(() => {
-      if (this.senseApi?.realtime) {
-        this.updateMatterState(this.senseApi.realtime);
-      }
+    // The initial realtime object is { power: 0 } until a frame arrives.
+    // Publishing that is what pinned Home at 0 W.
+    this.senseApi.openStream();
+
+    const interval = Math.max(10, cfg.pollingInterval ?? 30) * 1000;
+    this.pollTimer = setInterval(() => {
+      void this.pollIfStreamDown();
     }, interval);
 
-    // Persist energy periodically
-    setInterval(() => this.saveEnergy(), 5 * 60 * 1000);
+    this.saveTimer = setInterval(() => this.saveEnergy(), 5 * 60 * 1000);
+  }
+
+  private async pollIfStreamDown(): Promise<void> {
+    const api = this.senseApi;
+    if (!api || api.isStreamOpen) return;
+    try {
+      await api.updateRealtime();
+    } catch (err) {
+      this.log.warn(`Sense realtime poll failed: ${(err as Error).message}`);
+    }
   }
 
   private async registerMatterAccessory(): Promise<void> {
@@ -184,28 +199,40 @@ export class SenseMatterPlatform implements DynamicPlatformPlugin {
 
   private updateMatterState(data: RealtimeData): void {
     if (!this.matterAccessoryUuid || !this.api.matter) return;
+    if (!Number.isFinite(data.power)) return;
 
     const now = Date.now();
-    const deltaHours = (now - this.lastPowerUpdate) / 3_600_000;
-    this.cumulativeEnergyWh += (data.power * deltaHours);
+    // Cap the gap so a long disconnect does not dump an hour of watts into the counter.
+    const deltaMs = Math.min(Math.max(0, now - this.lastPowerUpdate), 120_000);
+    this.cumulativeEnergyWh += data.power * (deltaMs / 3_600_000);
     this.lastPowerUpdate = now;
 
     const powerMw = Math.round(data.power * 1000);
-    const voltageMv = data.voltage?.[0] ? Math.round(data.voltage[0] * 1000) : 120_000;
+    const leg = data.voltage?.find(v => v > 50);
+    const voltageMv = leg ? Math.round(leg * 1000) : 120_000;
     const currentMa = voltageMv > 0 ? Math.round((powerMw / voltageMv) * 1000) : 0;
 
-    // Always update power (frequent is fine)
-    void this.api.matter.updateAccessoryState(this.matterAccessoryUuid, 'electricalPowerMeasurement', {
+    const uuid = this.matterAccessoryUuid;
+    void this.api.matter.updateAccessoryState(uuid, 'electricalPowerMeasurement', {
       activePower: powerMw,
       voltage: voltageMv,
       activeCurrent: currentMa,
+    }).catch((err: unknown) => {
+      this.log.error('Matter power update failed:', err);
     });
+
+    if (now - this.lastPowerLog > 5 * 60 * 1000) {
+      this.lastPowerLog = now;
+      this.log.info(`Sense power: ${Math.round(data.power)} W`);
+    }
 
     // Throttle energy updates to ~once per 60s to avoid subscription failures
     if (now - this.lastEnergyPush > 60_000) {
       const energyMwh = Math.round(this.cumulativeEnergyWh * 1000);
-      void this.api.matter.updateAccessoryState(this.matterAccessoryUuid, 'electricalEnergyMeasurement', {
+      void this.api.matter.updateAccessoryState(uuid, 'electricalEnergyMeasurement', {
         cumulativeEnergyImported: { energy: energyMwh },
+      }).catch((err: unknown) => {
+        this.log.error('Matter energy update failed:', err);
       });
       this.lastEnergyPush = now;
       this.saveEnergy();

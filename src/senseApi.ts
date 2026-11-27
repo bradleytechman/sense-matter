@@ -48,7 +48,7 @@ export interface SenseApiOptions {
 }
 
 interface SenseMonitor {
-    id: string;
+    id: string | number;
 }
 
 interface AuthResponse {
@@ -80,11 +80,40 @@ interface TrendsResponse {
 
 interface RealtimePayload {
     w?: number;
+    W?: number;
     d_w?: number;
     solar_w?: number;
     voltage?: number[];
     hz?: number;
     devices?: { name?: string; w?: number }[];
+}
+
+interface RealtimeFrame {
+    type?: string;
+    payload?: RealtimePayload;
+}
+
+/**
+ * Sense realtime frames are envelopes (`{ type, payload }`).
+ * `hello` and `monitor_info` have no wattage. Treating those as a power
+ * sample writes 0 W into Home. Only `realtime_update` carries `payload.w`.
+ */
+export function realtimePayloadFromFrame(message: unknown): RealtimePayload | null {
+    if (!message || typeof message !== 'object') {
+        return null;
+    }
+    const frame = message as RealtimeFrame & RealtimePayload;
+    const sample = frame.type === 'realtime_update' ? frame.payload
+        : frame.type ? null
+        : frame;
+    if (!sample || typeof sample !== 'object') {
+        return null;
+    }
+    const watts = sample.w ?? sample.W ?? sample.d_w;
+    if (typeof watts !== 'number' || !Number.isFinite(watts)) {
+        return null;
+    }
+    return { ...sample, w: watts };
 }
 
 export class SenseApi extends EventEmitter {
@@ -108,8 +137,10 @@ export class SenseApi extends EventEmitter {
     private ws: WebSocket | null = null;
     private wsReconnectTimer: NodeJS.Timeout | null = null;
     private wsHeartbeatTimer: NodeJS.Timeout | null = null;
-    private wsStaleTimer: NodeJS.Timeout | null = null;
+    private wsReconnectDelay = WS_RECONNECT_BASE_MS;
+    private lastMessageAt = 0;
     private lastDataEmit = 0;
+    private streamWanted = false;
     private destroyed = false;
 
     constructor(options: SenseApiOptions) {
@@ -117,7 +148,8 @@ export class SenseApi extends EventEmitter {
         this.log = options.log;
         this.username = options.username;
         this.password = options.password;
-        this.monitorId = options.monitorId ?? null;
+        const configuredId = options.monitorId?.trim();
+        this.monitorId = configuredId ? configuredId : null;
         this.mfaEnabled = options.mfaEnabled ?? false;
         this.mfaSecret = options.mfaSecret ?? null;
         this.storagePath = options.storagePath ?? null;
@@ -176,53 +208,120 @@ export class SenseApi extends EventEmitter {
         this.monitors = body.monitors ?? [];
         this.issuedAt = Date.now();
         if (!this.monitorId && this.monitors.length > 0) {
-            this.monitorId = this.monitors[0].id;
+            this.monitorId = String(this.monitors[0].id);
         }
+    }
+
+    get isStreamOpen(): boolean {
+        return !!this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING);
     }
 
     async validateSession(): Promise<void> {
         if (!this.isAuthenticated) {
             await this.authenticate();
         }
-        // cheap probe
-        await this.fetchJson(`app/monitors/${this.monitorId}/status`);
+        if (!this.monitorId) {
+            throw new Error('Sense account has no monitors. Set monitorId in the plugin config.');
+        }
+        // Status carries no wattage. It only checks that the session is still accepted.
+        const probed = await this.fetchJson(`app/monitors/${this.monitorId}/status`);
+        if (probed.status === 401 || probed.status === 403) {
+            this.log.warn('Sense session rejected, signing in again');
+            await this.authenticate();
+            return;
+        }
+        if (probed.status !== 200) {
+            this.log.warn(`Sense monitor status returned HTTP ${probed.status}; continuing with the current session`);
+        }
+    }
+
+    /**
+     * One-shot sample used when the persistent stream is down.
+     * Sense has no HTTP endpoint for live watts.
+     */
+    async updateRealtime(timeoutMs = 15_000): Promise<RealtimeData> {
+        await this.validateSession();
+        if (!this.accessToken || !this.monitorId) {
+            throw new Error('Cannot sample Sense realtime: not authenticated');
+        }
+        const url = this.realtimeUrl();
+        return new Promise((resolve, reject) => {
+            const ws = new WebSocket(url, { handshakeTimeout: timeoutMs });
+            let settled = false;
+            let timer: NodeJS.Timeout;
+            const finish = (err?: Error, data?: RealtimeData) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                ws.removeAllListeners();
+                if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+                    ws.close();
+                }
+                if (err) reject(err);
+                else resolve(data as RealtimeData);
+            };
+            timer = setTimeout(() => {
+                ws.terminate();
+                finish(new Error('Timed out waiting for a Sense realtime sample'));
+            }, timeoutMs);
+            ws.on('message', (raw: WebSocket.RawData) => {
+                const payload = this.parseFrame(raw);
+                if (!payload) return;
+                finish(undefined, this.applyRealtimePayload(payload, true));
+            });
+            ws.on('error', (error: Error) => finish(error));
+        });
     }
 
     openStream(): void {
-        if (this.destroyed || !this.accessToken || !this.monitorId) {
-            this.log.warn('Cannot open Sense realtime stream: not authenticated yet');
+        this.streamWanted = true;
+        if (this.destroyed) return;
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
-        this.closeStream();
-        const url = `${WS_URL}${this.monitorId}/realtimefeed`;
-        this.ws = new WebSocket(url, {
-            headers: {
-                Authorization: `Bearer ${this.accessToken}`,
-                'Sense-Client-Version': '1.18.0',
-                'X-Sense-Protocol': '3',
-            },
-        });
+        if (!this.accessToken || !this.monitorId) {
+            this.log.warn('Cannot open Sense realtime stream: not authenticated yet');
+            this.scheduleReconnect();
+            return;
+        }
+
+        this.stopHeartbeat();
+        if (this.ws) {
+            this.ws.removeAllListeners();
+            this.ws.terminate();
+            this.ws = null;
+        }
+
+        // Token stays in the query string. Do not log this URL.
+        this.log.debug('Opening Sense realtime WebSocket');
+        this.ws = new WebSocket(this.realtimeUrl(), { handshakeTimeout: 15_000 });
 
         this.ws.on('open', () => {
             this.log.info('Sense realtime WebSocket connected');
+            this.lastMessageAt = Date.now();
             this.startHeartbeat();
         });
 
         this.ws.on('message', (raw: WebSocket.RawData) => {
-            try {
-                const payload = JSON.parse(raw.toString()) as RealtimePayload;
-                this.handleRealtime(payload);
-            } catch (err) {
-                this.log.debug('Bad realtime payload:', err);
+            this.lastMessageAt = Date.now();
+            this.wsReconnectDelay = WS_RECONNECT_BASE_MS;
+            const payload = this.parseFrame(raw);
+            if (payload) {
+                this.applyRealtimePayload(payload);
             }
         });
 
         this.ws.on('pong', () => {
-            // heartbeat ok
+            this.lastMessageAt = Date.now();
         });
 
         this.ws.on('close', (code: number) => {
             this.log.warn(`Sense WebSocket closed (${code}), scheduling reconnect`);
+            this.stopHeartbeat();
+            if (this.ws) {
+                this.ws.removeAllListeners();
+                this.ws = null;
+            }
             this.scheduleReconnect();
         });
 
@@ -231,8 +330,21 @@ export class SenseApi extends EventEmitter {
         });
     }
 
-    private handleRealtime(payload: RealtimePayload): void {
-        const power = payload.w ?? payload.d_w ?? 0;
+    private realtimeUrl(): string {
+        return `${WS_URL}${this.monitorId}/realtimefeed?access_token=${encodeURIComponent(this.accessToken ?? '')}`;
+    }
+
+    private parseFrame(raw: WebSocket.RawData): RealtimePayload | null {
+        try {
+            return realtimePayloadFromFrame(JSON.parse(raw.toString()));
+        } catch (err) {
+            this.log.debug('Bad realtime frame:', err);
+            return null;
+        }
+    }
+
+    private applyRealtimePayload(payload: RealtimePayload, forceEmit = false): RealtimeData {
+        const power = payload.w ?? payload.W ?? payload.d_w ?? 0;
         this.realtime = {
             power,
             solarPower: payload.solar_w ?? 0,
@@ -244,16 +356,24 @@ export class SenseApi extends EventEmitter {
         };
 
         const now = Date.now();
-        if (now - this.lastDataEmit >= DATA_EMIT_THROTTLE_MS) {
+        if (forceEmit || now - this.lastDataEmit >= DATA_EMIT_THROTTLE_MS) {
             this.lastDataEmit = now;
             this.emit('realtime', this.realtime);
         }
+        return this.realtime;
     }
 
     private startHeartbeat(): void {
         this.stopHeartbeat();
         this.wsHeartbeatTimer = setInterval(() => {
-            if (this.ws?.readyState === WebSocket.OPEN) {
+            if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+            const silentFor = Date.now() - this.lastMessageAt;
+            if (silentFor > WS_STALE_MS) {
+                this.log.warn(`Sense realtime stream silent for ${Math.round(silentFor / 1000)}s, reconnecting`);
+                this.ws.terminate();
+                return;
+            }
+            if (silentFor > WS_HEARTBEAT_INTERVAL_MS) {
                 this.ws.ping();
             }
         }, WS_HEARTBEAT_INTERVAL_MS);
@@ -265,8 +385,10 @@ export class SenseApi extends EventEmitter {
     }
 
     private scheduleReconnect(): void {
-        if (this.destroyed || this.wsReconnectTimer) return;
-        const delay = Math.min(WS_RECONNECT_BASE_MS * 2, WS_RECONNECT_MAX_MS);
+        if (this.destroyed || !this.streamWanted || this.wsReconnectTimer) return;
+        const delay = this.wsReconnectDelay;
+        this.wsReconnectDelay = Math.min(this.wsReconnectDelay * 2, WS_RECONNECT_MAX_MS);
+        this.log.debug(`Reconnecting Sense stream in ${Math.round(delay / 1000)}s`);
         this.wsReconnectTimer = setTimeout(() => {
             this.wsReconnectTimer = null;
             void this.validateSession().then(() => this.openStream()).catch(err => {
@@ -276,19 +398,17 @@ export class SenseApi extends EventEmitter {
         }, delay);
     }
 
-    private closeStream(): void {
+    destroy(): void {
+        this.destroyed = true;
+        this.streamWanted = false;
+        if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
+        this.wsReconnectTimer = null;
         this.stopHeartbeat();
         if (this.ws) {
             this.ws.removeAllListeners();
-            this.ws.close();
+            this.ws.terminate();
             this.ws = null;
         }
-    }
-
-    destroy(): void {
-        this.destroyed = true;
-        if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
-        this.closeStream();
         this.removeAllListeners();
     }
 
